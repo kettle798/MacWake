@@ -559,6 +559,13 @@ struct MacWakeMenuView: View {
                     .buttonStyle(.plain)
                 }
             }
+            // Fixed-width tabs left the row hugging the scroll view's leading edge and
+            // clipping the last tab whenever the row's own width came in under the card's —
+            // reported as the row drifting right with "Diğer" cut off. Stretching to the
+            // scroll view's own width and letting the frame's default center alignment take
+            // over centers the row when it fits, while still scrolling normally at larger
+            // Dynamic Type sizes where the tabs genuinely don't fit.
+            .frame(maxWidth: .infinity)
             .padding(.horizontal, 2).padding(.vertical, 2)
         }
     }
