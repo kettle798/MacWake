@@ -152,6 +152,12 @@ class BatteryTracker: ObservableObject {
     @Published var showMenuBarTimeRemaining: Bool = UserDefaults.standard.object(forKey: "showMenuBarTimeRemaining") as? Bool ?? false {
         didSet { UserDefaults.standard.set(showMenuBarTimeRemaining, forKey: "showMenuBarTimeRemaining") }
     }
+    /// Time to full charge from IOKit's own estimate (kIOPSTimeToFullChargeKey), refreshed
+    /// alongside battery level/plugged state. nil while not actively charging (at the limit,
+    /// already at 100%, or macOS hasn't calculated an estimate yet) — Time Remaining showed
+    /// nothing at all while charging until this existed, since remainingBatteryEstimate below
+    /// is deliberately discharge-only.
+    @Published var timeToFullCharge: TimeInterval?
     /// Spend fewer characters on the same metrics. Off by default: the existing layout stays
     /// exactly as it was, and this only ever shortens — it never wraps or reorders anything.
     @Published var menuBarCompact: Bool = UserDefaults.standard.bool(forKey: "menuBarCompact") {
@@ -664,6 +670,7 @@ class BatteryTracker: ObservableObject {
         let oldPlugged = self.isPluggedIn
         self.currentBatteryLevel = level
         self.isPluggedIn = plugged
+        self.timeToFullCharge = plugged ? getTimeToFullCharge() : nil
         updatePowerAdapterDetails()
         recordBatterySample(level: level, timestamp: Date())
         recordExternalHoldSample(level: level, plugged: plugged)
@@ -727,6 +734,21 @@ class BatteryTracker: ObservableObject {
             }
         }
         return false
+    }
+
+    /// macOS's own estimate, in minutes, when actively charging. -1 (or 0/absent) means "not
+    /// currently calculable" — not charging, already full, or the OS hasn't settled on a
+    /// number yet — and is treated the same as no estimate rather than shown as a bogus value.
+    private func getTimeToFullCharge() -> TimeInterval? {
+        let snapshot = IOPSCopyPowerSourcesInfo().takeRetainedValue()
+        let sources = IOPSCopyPowerSourcesList(snapshot).takeRetainedValue() as Array
+        for source in sources {
+            if let description = IOPSGetPowerSourceDescription(snapshot, source).takeUnretainedValue() as? [String: Any] {
+                guard let minutes = description[kIOPSTimeToFullChargeKey] as? Int, minutes > 0 else { return nil }
+                return TimeInterval(minutes * 60)
+            }
+        }
+        return nil
     }
 
     private func isACPowerConnected() -> Bool {
@@ -1306,6 +1328,7 @@ class BatteryTracker: ObservableObject {
         if plugged != isPluggedIn {
             currentBatteryLevel = level
             isPluggedIn = plugged
+            timeToFullCharge = plugged ? getTimeToFullCharge() : nil
             updatePowerAdapterDetails()
             recordBatterySample(level: level, timestamp: now)
             handlePowerSourceChange(toPlugged: plugged, batteryLevel: level)
@@ -1314,6 +1337,10 @@ class BatteryTracker: ObservableObject {
 
         currentBatteryLevel = level
         isPluggedIn = plugged
+        // Estimate ticks down roughly once a minute while charging even when nothing else
+        // about the power source changes, so this needs its own periodic refresh rather
+        // than relying on updatePowerStatus()'s power-source-change notifications alone.
+        timeToFullCharge = plugged ? getTimeToFullCharge() : nil
         // Refresh in both states: on battery this still updates temperature,
         // cycle count and health (it no longer early-returns without reading them).
         updatePowerAdapterDetails()
@@ -1714,7 +1741,9 @@ extension BatteryTracker {
             }
         }
 
-        if showMenuBarTimeRemaining, let remaining = remainingBatteryEstimate {
+        if showMenuBarTimeRemaining, let remaining = BatteryTimeEstimate.label(
+            isPluggedIn: isPluggedIn, timeToFullCharge: timeToFullCharge, timeToEmpty: remainingBatteryEstimate
+        ) {
             // Keep the tilde even when compact: it is what separates a remaining estimate
             // from the elapsed screen-on time above it.
             parts.append("~" + MenuBarLabel.duration(seconds: remaining, compact: menuBarCompact))
@@ -1941,6 +1970,16 @@ enum BatteryHealthMath {
     /// after a full day (see `headline`), that single bad read stuck for up to 24 hours.
     static func shouldFallBackToRawMaxCapacity(hasEverHadRatioSample: Bool) -> Bool {
         !hasEverHadRatioSample
+    }
+}
+
+/// Which "time remaining" figure applies right now — kept pure so the direction (empty vs.
+/// full) is testable without a running app. `remainingBatteryEstimate` is deliberately
+/// discharge-only and `timeToFullCharge` deliberately charge-only, so Time Remaining showed
+/// nothing at all while charging before this existed to pick between them.
+enum BatteryTimeEstimate {
+    static func label(isPluggedIn: Bool, timeToFullCharge: TimeInterval?, timeToEmpty: TimeInterval?) -> TimeInterval? {
+        isPluggedIn ? timeToFullCharge : timeToEmpty
     }
 }
 
