@@ -27,4 +27,32 @@ final class BatteryTimeEstimateTests: XCTestCase {
         let label = BatteryTimeEstimate.label(isPluggedIn: false, timeToFullCharge: 1800, timeToEmpty: nil)
         XCTAssertNil(label)
     }
+
+    // MARK: - Plausibility ceiling (the live "~107:56" report)
+
+    func testAnImplausiblyLongDischargeEstimateIsHidden() {
+        // ~108 hours from a thin-sample statistical skew, not a real prediction.
+        let label = BatteryTimeEstimate.label(isPluggedIn: false, timeToFullCharge: nil, timeToEmpty: 388_560)
+        XCTAssertNil(label)
+    }
+
+    func testAnImplausiblyLongChargeEstimateIsHidden() {
+        // macOS's own kIOPSTimeToFullChargeKey can be unreliable during near-full trickle
+        // charging — the same failure mode, on the charging side.
+        let label = BatteryTimeEstimate.label(isPluggedIn: true, timeToFullCharge: 388_560, timeToEmpty: nil)
+        XCTAssertNil(label)
+    }
+
+    func testAnEstimateRightAtTheCeilingIsStillShown() {
+        XCTAssertEqual(
+            BatteryTimeEstimate.label(isPluggedIn: false, timeToFullCharge: nil, timeToEmpty: BatteryTimeEstimate.plausibleCeiling),
+            BatteryTimeEstimate.plausibleCeiling
+        )
+    }
+
+    func testAnEstimateJustOverTheCeilingIsHidden() {
+        XCTAssertNil(BatteryTimeEstimate.label(
+            isPluggedIn: false, timeToFullCharge: nil, timeToEmpty: BatteryTimeEstimate.plausibleCeiling + 1
+        ))
+    }
 }

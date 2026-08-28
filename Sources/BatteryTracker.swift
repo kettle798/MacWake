@@ -1978,8 +1978,20 @@ enum BatteryHealthMath {
 /// discharge-only and `timeToFullCharge` deliberately charge-only, so Time Remaining showed
 /// nothing at all while charging before this existed to pick between them.
 enum BatteryTimeEstimate {
+    /// No real Mac takes longer than this to drain or fill a battery — Apple's own longest
+    /// advertised battery life is well under it. A "~107:56" report showed the discharge
+    /// estimate can balloon when very little of the week's actual battery usage has a large
+    /// screen-on time attached to it (a thin statistical sample reads as an extremely slow
+    /// drain rate rather than as "not enough data yet"); the charging estimate has a matching
+    /// failure mode, where macOS's own kIOPSTimeToFullChargeKey can be wildly unreliable
+    /// during near-full trickle charging. Either way, a number this size is noise, not signal
+    /// — showing it reads as a real prediction, not as "no reliable estimate right now."
+    static let plausibleCeiling: TimeInterval = 24 * 3600
+
     static func label(isPluggedIn: Bool, timeToFullCharge: TimeInterval?, timeToEmpty: TimeInterval?) -> TimeInterval? {
-        isPluggedIn ? timeToFullCharge : timeToEmpty
+        let raw = isPluggedIn ? timeToFullCharge : timeToEmpty
+        guard let raw, raw > 0, raw <= plausibleCeiling else { return nil }
+        return raw
     }
 }
 
