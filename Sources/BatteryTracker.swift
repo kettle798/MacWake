@@ -751,6 +751,21 @@ class BatteryTracker: ObservableObject {
         return nil
     }
 
+    /// macOS's own estimate, in minutes, while on battery — the same field `pmset -g batt`'s
+    /// own "remaining" figure comes from, and very likely what other battery-monitoring menu
+    /// bar apps read too. -1/0/absent ("Calculating…") means not yet available.
+    private func getTimeToEmpty() -> TimeInterval? {
+        let snapshot = IOPSCopyPowerSourcesInfo().takeRetainedValue()
+        let sources = IOPSCopyPowerSourcesList(snapshot).takeRetainedValue() as Array
+        for source in sources {
+            if let description = IOPSGetPowerSourceDescription(snapshot, source).takeUnretainedValue() as? [String: Any] {
+                guard let minutes = description[kIOPSTimeToEmptyKey] as? Int, minutes > 0 else { return nil }
+                return TimeInterval(minutes * 60)
+            }
+        }
+        return nil
+    }
+
     private func isACPowerConnected() -> Bool {
         let snapshot = IOPSCopyPowerSourcesInfo().takeRetainedValue()
         let sources = IOPSCopyPowerSourcesList(snapshot).takeRetainedValue() as Array
@@ -1505,8 +1520,18 @@ class BatteryTracker: ObservableObject {
         return UsageSummary(sessions: recentSessionsIncludingCurrent.filter { $0.startTime >= weekStart })
     }
 
+    /// Prefers macOS's own sensor-based estimate (kIOPSTimeToEmptyKey) — reported to track
+    /// noticeably closer to other battery-monitoring apps, and to update on the OS's own
+    /// cadence as load actually changes, rather than the drift this heuristic fallback has:
+    /// a cumulative average since the session started reacts slowly to a recent load change,
+    /// and drifts upward continuously between whole-percent drops (the denominator only
+    /// moves in 1% steps while the numerator grows every second) — reported as the displayed
+    /// value swinging between the lowest and highest of several comparable apps within the
+    /// same day. Kept only for the (documented) case where macOS hasn't settled on its own
+    /// number yet, right after unplugging.
     var remainingBatteryEstimate: TimeInterval? {
         guard !isPluggedIn, currentBatteryLevel > 0 else { return nil }
+        if let systemEstimate = getTimeToEmpty() { return systemEstimate }
 
         let currentEfficiency = currentSession.flatMap { session -> Double? in
             let live = liveSession(session)
