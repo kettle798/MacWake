@@ -6,6 +6,12 @@ APP_DIR="${APP_NAME}.app"
 CONTENTS_DIR="${APP_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
+# Where `swift build -c release --arch arm64 --arch x86_64` actually puts the universal
+# binaries. This moved from .build/release to .build/apple/Products/Release under the
+# Swift 6.3 toolchain (multi-arch builds now nest under a per-destination "apple" root) —
+# verified against the currently active toolchain rather than assumed, per this Mac's
+# `swift build` layout.
+RELEASE_DIR=".build/apple/Products/Release"
 
 echo "=== Cleaning previous builds ==="
 rm -rf "${APP_DIR}"
@@ -54,9 +60,9 @@ cat <<EOF > "${CONTENTS_DIR}/Info.plist"
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.80</string>
+    <string>1.81</string>
     <key>CFBundleVersion</key>
-    <string>86</string>
+    <string>87</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>LSApplicationCategoryType</key>
@@ -113,7 +119,7 @@ XCODE_DIR="$(ls -d /Applications/Xcode*.app 2>/dev/null | head -1)/Contents/Deve
 DEVELOPER_DIR="${DEVELOPER_DIR:-$XCODE_DIR}" swift build -c release --arch arm64 --arch x86_64
 
 echo "=== Copying Binary to App Bundle ==="
-cp .build/release/MacWake "${MACOS_DIR}/MacWake"
+cp ${RELEASE_DIR}/MacWake "${MACOS_DIR}/MacWake"
 
 echo "=== Generating App Intents metadata (Shortcuts support) ==="
 # swift build doesn't run Xcode's appintentsmetadataprocessor, so Shortcuts would never
@@ -127,7 +133,7 @@ AI_TMP="$(mktemp -d)"
 ls Sources/*.swift > "${AI_TMP}/sources.txt"
 # One slice only: the universal build emits an identical set per architecture, and
 # feeding the processor both makes every intent appear twice.
-find .build/out/Intermediates.noindex/MacWake.build/Release/MacWake-p.build -path "*/arm64/*" -name "*.swiftconstvalues" > "${AI_TMP}/constvals.txt"
+find .build/apple/Intermediates.noindex/MacWake.build/Release/MacWake.build -path "*/arm64/*" -name "*.swiftconstvalues" > "${AI_TMP}/constvals.txt"
 if "${TOOLCHAIN}/usr/bin/appintentsmetadataprocessor" \
     --output "${AI_TMP}/out" \
     --toolchain-dir "${TOOLCHAIN}" \
@@ -139,7 +145,7 @@ if "${TOOLCHAIN}/usr/bin/appintentsmetadataprocessor" \
     --target-triple arm64-apple-macos14.0 \
     --source-file-list "${AI_TMP}/sources.txt" \
     --swift-const-vals-list "${AI_TMP}/constvals.txt" \
-    --binary-file .build/release/MacWake \
+    --binary-file ${RELEASE_DIR}/MacWake \
     --force --quiet-warnings 2>/dev/null \
     && [ -d "${AI_TMP}/out/Metadata.appintents" ]; then
     APP_SHORTCUTS_PROCESSOR="${TOOLCHAIN}/usr/bin/appshortcutstringsprocessor"
@@ -162,10 +168,10 @@ rm -rf "${AI_TMP}"
 echo "=== Embedding command-line tool ==="
 HELPERS_DIR="${CONTENTS_DIR}/Helpers"
 mkdir -p "${HELPERS_DIR}"
-cp .build/release/MacWakeCLI "${HELPERS_DIR}/macwake"
+cp ${RELEASE_DIR}/MacWakeCLI "${HELPERS_DIR}/macwake"
 
 echo "=== Embedding privileged helper daemon ==="
-cp .build/release/MacWakeHelper "${MACOS_DIR}/MacWakeHelper"
+cp ${RELEASE_DIR}/MacWakeHelper "${MACOS_DIR}/MacWakeHelper"
 LAUNCHD_DIR="${CONTENTS_DIR}/Library/LaunchDaemons"
 mkdir -p "${LAUNCHD_DIR}"
 cat <<EOF > "${LAUNCHD_DIR}/com.jarvisit.macwake.helper.plist"
@@ -196,7 +202,7 @@ echo "=== Embedding WidgetKit extension ==="
 # prefixed by the host app's.
 WIDGET_DIR="${CONTENTS_DIR}/PlugIns/MacWakeWidget.appex"
 mkdir -p "${WIDGET_DIR}/Contents/MacOS" "${WIDGET_DIR}/Contents/Resources"
-cp .build/release/MacWakeWidget "${WIDGET_DIR}/Contents/MacOS/MacWakeWidget"
+cp ${RELEASE_DIR}/MacWakeWidget "${WIDGET_DIR}/Contents/MacOS/MacWakeWidget"
 # The widget is its own bundle — it needs its own copies of the localization tables.
 for lproj in Resources/*.lproj; do
     [ -d "$lproj" ] || continue
